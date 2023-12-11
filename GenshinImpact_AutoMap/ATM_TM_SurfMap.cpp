@@ -146,6 +146,7 @@ void ATM_TM_SurfMap::Init()
 void ATM_TM_SurfMap::SURFMatch()
 {
 	//static Point hisP[3];
+	auto match_success = true;
 
 	Mat img_scene(_mapMat);
 	Mat img_object(_minMapMat(Rect(30, 30, _minMapMat.cols - 60, _minMapMat.rows - 60)));
@@ -154,6 +155,8 @@ void ATM_TM_SurfMap::SURFMatch()
 
 	if (img_object.empty())
 	{
+		match_success = false;
+		goto filter_beg;
 		return;
 	}
 
@@ -447,6 +450,8 @@ void ATM_TM_SurfMap::SURFMatch()
 #ifdef _DEBUG
 			cout << "SURF Match Fail Not KeyPoint" << endl;
 #endif // _DEBUG
+			match_success = false;
+			goto filter_beg;
 			return;
 		}
 		else
@@ -493,6 +498,8 @@ void ATM_TM_SurfMap::SURFMatch()
 #ifdef _DEBUG
 				cout << "SURF Match Fail" << endl;
 #endif
+				match_success = false;
+				goto filter_beg;
 				return;
 			}
 			else
@@ -506,55 +513,47 @@ void ATM_TM_SurfMap::SURFMatch()
 			}
 		}
 	}
+
+// 有点屎山，直接goto 到此处
+filter_beg:
 	auto pos_raw = cv::Point2d(pos.x, pos.y);
 	auto u_k = cv::Point2d(0, 0);
 	auto od_valid = control_odometer_calculation(img_object, u_k, 1);
-	if (!od_valid)
-	{
-		cout << "no u_k update" << " with pos: " << pos << endl;
-		// KF.init(stateNum, measureNum, 0);
+	auto ms_valid = match_success;
 
-		KF.statePost.at<float>(0) = pos.x;
-		KF.statePost.at<float>(1) = pos.y;
-
-		Mat prediction = KF.predict();
-		Point2d predictPt = Point2d(prediction.at<float>(0), prediction.at<float>(1));
-
-		//3.update measurement
-		measurement.at<float>(0, 0) = static_cast<float>(pos.x);
-		measurement.at<float>(1, 0) = static_cast<float>(pos.y);
-
-		//4.update
-		KF.correct(measurement);
-
-		pos = Point2d(KF.statePost.at<float>(0), KF.statePost.at<float>(1));
-		//isConveying = false;
-		set_mini_map(img_object);
-	}
-	else
-	{
-		cout << "u_k: " << u_k << " with pos: " << pos << endl;
-		// cv::imshow("img_object", img_object);
-		// cv::waitKey();
-
+	// 里程计能更就更；全局匹配能配就配
+	if (od_valid) {
 		cv::Mat u_k_mat = cv::Mat::zeros(controlNum, 1, CV_32F);
 		u_k_mat.at<float>(0, 0) = u_k.x;
 		u_k_mat.at<float>(1, 0) = u_k.y;
-		//Point statePt = Point((int)KF.statePost.at<float>(0), (int)KF.statePost.at<float>(1));
-
-		//2.kalman prediction   
-		Mat prediction = KF.predict(u_k_mat);
-		Point2d predictPt = Point2d(prediction.at<float>(0), prediction.at<float>(1));
-
+		cv::Mat prediction = KF.predict(u_k_mat);
+		cv::Point2d predictPt = cv::Point2d(prediction.at<float>(0), prediction.at<float>(1));
+		pos = predictPt;
+	}
+	if (ms_valid) {
 		//3.update measurement
-		measurement.at<float>(0, 0) = static_cast<float>(pos.x);
-		measurement.at<float>(1, 0) = static_cast<float>(pos.y);
-
+		measurement.at<float>(0, 0) = static_cast<float>(pos_raw.x);
+		measurement.at<float>(1, 0) = static_cast<float>(pos_raw.y);
 		//4.update
 		KF.correct(measurement);
-
-		pos = Point2d(KF.statePost.at<float>(0), KF.statePost.at<float>(1));
+		pos = cv::Point2d(KF.statePost.at<float>(0), KF.statePost.at<float>(1));
 	}
+	if (!od_valid && ms_valid) {
+		KF.statePost.at<float>(0) = static_cast<float>(pos_raw.x);
+		KF.statePost.at<float>(1) = static_cast<float>(pos_raw.y);
+		cv::Mat prediction = KF.predict();
+		cv::Point2d predictPt = cv::Point2d(prediction.at<float>(0), prediction.at<float>(1));
+
+		//3.update measurement
+		measurement.at<float>(0, 0) = static_cast<float>(pos_raw.x);
+		measurement.at<float>(1, 0) = static_cast<float>(pos_raw.y);
+		KF.correct(measurement);
+		pos = cv::Point2d(KF.statePost.at<float>(0), KF.statePost.at<float>(1));
+		set_mini_map(img_object);
+	}
+
+
+	
 	// pos = pos_raw;
 
 	hisP[0] = hisP[1];
